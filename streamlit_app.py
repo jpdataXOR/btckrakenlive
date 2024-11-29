@@ -4,6 +4,7 @@ import pandas as pd
 import time
 import plotly.graph_objects as go
 from pytz import timezone
+import streamlit.components.v1 as components
 
 # Function to fetch live trade data from Kraken
 def fetch_trade_data():
@@ -119,6 +120,13 @@ while True:
             st.session_state.price_history.sort_values("Timestamp", ascending=False).head(20),
             height=400,
         )
+
+    # Dynamically update the browser tab title to show the latest price
+    components.html(f"""
+        <script>
+            document.title = 'Live Bitcoin Price: ${latest_price:,.2f}';
+        </script>
+    """, height=0)
 
     # Wait for the next update
     time.sleep(refresh_rate)
