@@ -15,41 +15,36 @@ def convert_to_aest(utc_time):
 def fetch_ohlc_data(interval, retries=3, backoff_factor=5):
     url = f"https://api.kraken.com/0/public/OHLC?pair=BTCUSD&interval={interval}"
     attempt = 0
-    
+
     while attempt < retries:
         response = requests.get(url)
         try:
             data = response.json()
             
-            # Check for API Rate Limit Errors
             if "error" in data and data["error"]:
                 error_msg = data["error"][0]
-                
                 if "EAPI:Rate limit exceeded" in error_msg:
-                    wait_time = backoff_factor * (2 ** attempt)  # Exponential backoff
+                    wait_time = backoff_factor * (2 ** attempt)
                     st.warning(f"⚠ Rate Limit Exceeded! Retrying in {wait_time}s...")
                     time.sleep(wait_time)
                     attempt += 1
-                    continue  # Retry
-                
+                    continue  
                 return None, f"⚠ Kraken API Error: {error_msg}"
 
             if "result" not in data:
                 return None, "⚠ API Response Missing 'result' Key!"
 
-            # Extract OHLC data
             ohlc_data = data["result"].get("XXBTZUSD", [])
             if not ohlc_data:
                 return None, "⚠ No Data Available from API!"
 
-            # Convert to DataFrame
             df = pd.DataFrame(ohlc_data, columns=["Timestamp", "Open", "High", "Low", "Close", "Vwap", "Volume", "Trades"])
             df["Timestamp"] = pd.to_datetime(df["Timestamp"], unit="s", utc=True)
             df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
             df.dropna(subset=["Close"], inplace=True)
             df["Timestamp"] = df["Timestamp"].apply(convert_to_aest)
 
-            return df, None  # No error
+            return df, None  
 
         except Exception as e:
             return None, f"⚠ Exception: {str(e)}"
@@ -69,10 +64,10 @@ with col1:
     st.markdown("**⏳ Refresh Interval:**")
     refresh_rate = st.radio(
         "Choose refresh rate:", 
-        [15, 30, 900, 3600],  # Removed 5s, added 15s as default
+        [15, 30, 900, 3600],  
         format_func=lambda x: f"{x} sec" if x < 60 else f"{x//60} min", 
         horizontal=True,
-        index=0  # Default: 15 seconds
+        index=0  
     )
 
 with col2:
@@ -82,7 +77,7 @@ with col2:
         [1, 15, 60], 
         format_func=lambda x: f"{x} min", 
         horizontal=True,
-        index=1  # Default: 15 minutes
+        index=1  
     )
 
 with col3:
@@ -107,14 +102,12 @@ while True:
     new_data, error_message = fetch_ohlc_data(ohlc_interval)
 
     if error_message:
-        debug_message = error_message  # Show API error
+        debug_message = error_message  
     elif new_data is None or new_data.empty:
         debug_message = "**⚠ No new data received!**"
     else:
-        # Update session history
         st.session_state.price_history = new_data.copy()
         
-        # Latest price and timestamp
         latest_row = new_data.iloc[-1]
         latest_price = latest_row["Close"]
         latest_time = latest_row["Timestamp"]
@@ -138,13 +131,15 @@ while True:
         fig = go.Figure()
 
         if new_data is not None and not new_data.empty:
+            last_20_data = new_data.tail(20)  
+
             # Step line for Close prices
             fig.add_trace(
                 go.Scatter(
-                    x=new_data["Timestamp"],
-                    y=new_data["Close"],
+                    x=last_20_data["Timestamp"],
+                    y=last_20_data["Close"],
                     mode="lines",
-                    line=dict(shape="hv", color="black", width=2),  # Step line
+                    line=dict(shape="hv", color="black", width=2),  
                     name="Price",
                 )
             )
@@ -167,8 +162,7 @@ while True:
             title="Live Bitcoin Price",
             xaxis_title="Time (AEST)",
             yaxis_title="Price (USD)",
-            template="plotly_dark",
-            showlegend=False,
+            showlegend=False
         )
 
         # Plot chart
