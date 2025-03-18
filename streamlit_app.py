@@ -3,130 +3,109 @@ import requests
 import pandas as pd
 import time
 import plotly.graph_objects as go
-from pytz import timezone
 import streamlit.components.v1 as components
 
-# Function to fetch live trade data from Kraken
-def fetch_trade_data():
-    url = "https://api.kraken.com/0/public/Trades?pair=BTCUSD"
-    response = requests.get(url)
-    data = response.json()
-    trades = data["result"]["XXBTZUSD"]
-    
-    # Parse trades into a DataFrame
-    trade_data = pd.DataFrame(
-        [[float(trade[0]), trade[2]] for trade in trades],
-        columns=["Price", "Timestamp"]
-    )
-    trade_data["Timestamp"] = pd.to_datetime(trade_data["Timestamp"], unit="s", utc=True)
-    return trade_data
-
-# Convert UTC time to Australian Eastern Standard Time (AEST)
-def convert_to_aest(utc_time):
-    aest = timezone("Australia/Sydney")
-    return utc_time.astimezone(aest)
+# Kraken API for OHLC data
+KRAKEN_OHLC_URL = "https://api.kraken.com/0/public/OHLC"
+PAIR = "BTCUSD"
+INTERVAL = 1  # 1-minute OHLC data
 
 # Streamlit UI setup
-st.set_page_config(page_title="Live Bitcoin Prices", layout="wide")
+st.set_page_config(page_title="Live Bitcoin OHLC", layout="wide")
+st.title("Live Bitcoin OHLC Close Prices (Step Chart)")
+st.markdown("Streaming OHLC data via Kraken API.")
 
-# Title and description
-st.title("Live Bitcoin Prices")
-st.markdown("Real-time Bitcoin trade data from Kraken, updated live.")
+# Debug Status
+status_placeholder = st.empty()
+chart_placeholder = st.empty()
+price_placeholder = st.empty()
 
-# Initialize session state for price history
-if "price_history" not in st.session_state:
-    st.session_state.price_history = pd.DataFrame(columns=["Price", "Timestamp"])
+refresh_rate = 2  # Fetch data every 2 seconds
+max_data_points = 50  # Keep last 50 points to reduce memory load
 
-# Real-time update loop
-placeholder_chart = st.empty()  # Placeholder for the chart
-placeholder_price = st.empty()  # Placeholder for the latest price and time
-placeholder_table = st.empty()  # Placeholder for the live table
-refresh_rate = 2  # Refresh interval in seconds
+# Initialize session state for OHLC history
+if "ohlc_data" not in st.session_state:
+    st.session_state.ohlc_data = pd.DataFrame(columns=["Time", "Close"])
+
+# Function to fetch OHLC data
+def fetch_ohlc_data():
+    try:
+        params = {"pair": PAIR, "interval": INTERVAL}
+        response = requests.get(KRAKEN_OHLC_URL, params=params, timeout=5)  # Add timeout for reliability
+        response.raise_for_status()  # Raise exception for HTTP errors
+
+        data = response.json()
+        ohlc = data.get("result", {}).get("XXBTZUSD", [])
+        
+        if not ohlc:
+            return None  # No data received, return None
+
+        # Convert to DataFrame and get close prices
+        df = pd.DataFrame(ohlc, columns=["Time", "Open", "High", "Low", "Close", "Vwap", "Volume", "Trades"])
+        df["Time"] = pd.to_datetime(df["Time"], unit="s")
+        df["Close"] = df["Close"].astype(float)
+        return df[["Time", "Close"]]
+    
+    except requests.exceptions.RequestException as e:
+        status_placeholder.error(f"⚠️ API Error: {e}")
+        return None  # Return None on error
 
 # Main loop
 while True:
-    # Fetch the latest data
-    new_data = fetch_trade_data()
-    new_data["Timestamp"] = new_data["Timestamp"].apply(convert_to_aest)  # Convert to AEST
-    st.session_state.price_history = pd.concat(
-        [st.session_state.price_history, new_data], ignore_index=True
-    ).drop_duplicates(subset="Timestamp")  # Ensure no duplicate timestamps
+    status_placeholder.text("🔄 Fetching latest OHLC data...")
+    
+    new_data = fetch_ohlc_data()
+    
+    if new_data is not None and not new_data.equals(st.session_state.ohlc_data.tail(len(new_data))):
+        # Merge new data, avoid duplicates
+        st.session_state.ohlc_data = pd.concat([st.session_state.ohlc_data, new_data]).drop_duplicates(subset="Time")
 
-    # Update the latest price and time
-    latest_price = st.session_state.price_history["Price"].iloc[-1]
-    latest_time = st.session_state.price_history["Timestamp"].iloc[-1]
+        # Keep last N data points
+        st.session_state.ohlc_data = st.session_state.ohlc_data.tail(max_data_points)
 
-    # Display the latest price and time on top
-    with placeholder_price.container():
-        st.markdown(
-            f"<h2 style='text-align: center;'>Latest Price: <span style='color: green;'>${latest_price:,.2f}</span></h2>",
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            f"<h3 style='text-align: center;'>Time: {latest_time.strftime('%Y-%m-%d %H:%M:%S')}</h3>",
-            unsafe_allow_html=True,
-        )
+        # Get latest price
+        latest_time = st.session_state.ohlc_data["Time"].iloc[-1]
+        latest_price = st.session_state.ohlc_data["Close"].iloc[-1]
 
-    # Update the chart with a unique key based on current time
-    with placeholder_chart.container():
-        fig = go.Figure()
+        # Update latest price display
+        with price_placeholder.container():
+            st.markdown(f"<h2 style='text-align: center;'>Latest Close: <span style='color: green;'>${latest_price:,.2f}</span></h2>",
+                        unsafe_allow_html=True)
+            st.markdown(f"<h3 style='text-align: center;'>Time: {latest_time}</h3>", unsafe_allow_html=True)
 
-        # Plot all prices with a material black line
-        fig.add_trace(
-            go.Scatter(
-                x=st.session_state.price_history["Timestamp"],
-                y=st.session_state.price_history["Price"],
-                mode="lines",
-                line=dict(color="black", width=2),
-                name="Price",
+        # Update step chart
+        with chart_placeholder.container():
+            fig = go.Figure()
+
+            fig.add_trace(go.Scatter(
+                x=st.session_state.ohlc_data["Time"],
+                y=st.session_state.ohlc_data["Close"],
+                mode="lines+markers",
+                line=dict(shape="hv", color="black", width=2),
+                marker=dict(size=8, color="black"),
+                name="OHLC Close"
+            ))
+
+            fig.update_layout(
+                title="Bitcoin OHLC Close Price (Step Chart)",
+                xaxis_title="Time",
+                yaxis_title="Price (USD)",
+                template="plotly_dark",
+                showlegend=False
             )
-        )
 
-        # Highlight the latest price with a black dot
-        fig.add_trace(
-            go.Scatter(
-                x=[latest_time],
-                y=[latest_price],
-                mode="markers+text",
-                marker=dict(size=10, color="black"),
-                name="Latest",
-                text=f"${latest_price:,.2f}",
-                textposition="top center",
-            )
-        )
+            st.plotly_chart(fig, use_container_width=True)
 
-        # Configure layout
-        fig.update_layout(
-            title="Live Bitcoin Price",
-            xaxis_title="Time (AEST)",
-            yaxis_title="Price (USD)",
-            template="plotly_dark",
-            showlegend=False,
-        )
+        # Update browser tab title dynamically
+        components.html(f"""
+            <script>
+                document.title = 'BTC/USD: ${latest_price:,.2f}';
+            </script>
+        """, height=0)
 
-        # Add hover mode
-        fig.update_traces(
-            hovertemplate="Time: %{x}<br>Price: $%{y:,.2f}<extra></extra>"
-        )
+        status_placeholder.text("✅ Data updated successfully!")
 
-        # Using current time to generate a unique key for each chart
-        chart_key = f"live_chart_{int(time.time())}"
-        st.plotly_chart(fig, use_container_width=True, key=chart_key)
+    else:
+        status_placeholder.text("⚠️ No new data. Waiting for next fetch...")
 
-    # Update the live table
-    with placeholder_table.container():
-        st.markdown("### Live Prices Table")
-        st.dataframe(
-            st.session_state.price_history.sort_values("Timestamp", ascending=False).head(20),
-            height=400,
-        )
-
-    # Dynamically update the browser tab title to show the latest price
-    components.html(f"""
-        <script>
-            document.title = 'Live Bitcoin Price: ${latest_price:,.2f}';
-        </script>
-    """, height=0)
-
-    # Wait for the next update
-    time.sleep(refresh_rate)
+    time.sleep(refresh_rate)  # Avoid excessive API calls
