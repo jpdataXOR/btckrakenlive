@@ -50,9 +50,13 @@ if "price_history" not in st.session_state:
 # Initialize historical projections storage - empty on first run
 if "historical_projections" not in st.session_state:
     st.session_state.historical_projections = []
+
+# Initialize to track refresh groups    
+if "refresh_count" not in st.session_state:
+    st.session_state.refresh_count = 0
     
-# Set maximum number of historical projections to keep
-MAX_HISTORICAL_PROJECTIONS = 5
+# Set maximum number of historical projection groups to keep
+MAX_HISTORICAL_GROUPS = 5
 
 # Chart & Debug placeholders
 placeholder_chart = st.empty()
@@ -64,12 +68,15 @@ while True:
     stock_data = get_stock_data("XXBTZUSD", ohlc_interval)
     new_projections = generate_future_projections("XXBTZUSD", ohlc_interval)
     
-    # Add timestamp to the projections for tracking
+    # Tag this batch of projections with the current refresh count
     current_time = datetime.now()
+    refresh_group = st.session_state.refresh_count
+    
     for proj in new_projections:
         proj["created_at"] = current_time
+        proj["refresh_group"] = refresh_group
     
-    # Add new projections to historical list (if not first run)
+    # Handle projections storage
     if new_projections:
         if st.session_state.is_first_run:
             # On first run, only keep the current projections
@@ -78,8 +85,20 @@ while True:
         else:
             # On subsequent runs, append new projections to history
             st.session_state.historical_projections = [*new_projections, *st.session_state.historical_projections]
-            # Limit the number of historical projections
-            st.session_state.historical_projections = st.session_state.historical_projections[:MAX_HISTORICAL_PROJECTIONS]
+            
+        # Increment refresh count for next batch
+        st.session_state.refresh_count += 1
+        
+        # Keep only projections from the most recent MAX_HISTORICAL_GROUPS refreshes
+        groups_to_keep = set()
+        projections_to_keep = []
+        
+        for proj in st.session_state.historical_projections:
+            if len(groups_to_keep) < MAX_HISTORICAL_GROUPS or proj["refresh_group"] in groups_to_keep:
+                projections_to_keep.append(proj)
+                groups_to_keep.add(proj["refresh_group"])
+                
+        st.session_state.historical_projections = projections_to_keep
 
     if not stock_data:
         debug_message = "**⚠ No new data received!**"
@@ -113,24 +132,27 @@ while True:
                 name="Price",
             ))
 
-            # Display historical projections with fading colors
-            for idx, proj in enumerate(st.session_state.historical_projections):
-                # Calculate opacity based on age (newer = more opaque)
-                age_seconds = (datetime.now() - proj["created_at"]).total_seconds()
-                max_age_seconds = refresh_rate * MAX_HISTORICAL_PROJECTIONS
-                opacity = max(0.1, 1 - (age_seconds / max_age_seconds))
+            # Get the current (newest) refresh group
+            current_group = st.session_state.refresh_count - 1 if not st.session_state.is_first_run else 0
+            
+            # Display all projections
+            for proj in st.session_state.historical_projections:
+                # Calculate opacity based on age of the projection group
+                group_age = current_group - proj["refresh_group"]
+                max_age = MAX_HISTORICAL_GROUPS - 1
+                opacity = max(0.1, 1 - (group_age / max_age))
                 
-                # Newest projection is red, older ones fade to light gray
-                if idx == 0:
-                    # Newest projection is red
+                # Current projections are red, older groups are gray
+                if proj["refresh_group"] == current_group:
+                    # For current group (multiple projections), use red with varying intensity
                     color = f"rgba(255,0,0,{opacity})"
                     name = f"{proj['label']} (Current)"
                 else:
                     # Older projections are increasingly light gray
-                    # Using higher base values (180-220) for lighter gray
                     gray_value = int(180 + (40 * (1 - opacity)))
                     color = f"rgba({gray_value},{gray_value},{gray_value},{opacity})"
-                    name = f"{proj['label']} (Past {idx}, {int(opacity*100)}%)"
+                    age_text = "Previous" if group_age == 1 else f"{group_age} refreshes ago"
+                    name = f"{proj['label']} ({age_text})"
                 
                 # Only show if still has some visibility
                 if opacity > 0.1:
@@ -155,7 +177,9 @@ while True:
     with placeholder_debug.container():
         st.markdown(debug_message)
         if not st.session_state.is_first_run:
-            st.markdown(f"**Historical Projections:** {len(st.session_state.historical_projections)}")
+            total_projections = len(st.session_state.historical_projections)
+            unique_groups = len(set(p["refresh_group"] for p in st.session_state.historical_projections))
+            st.markdown(f"**Historical Projections:** {total_projections} across {unique_groups} refresh groups")
 
     # Update countdown timer
     for remaining in range(refresh_rate, 0, -1):
