@@ -10,18 +10,28 @@ KRAKEN_OHLC_URL = "https://api.kraken.com/0/public/OHLC"
 PAIR = "BTCUSD"
 INTERVAL = 1  # 1-minute OHLC data
 
+# Refresh interval options
+refresh_options = {
+    "5 seconds": 5,
+    "30 seconds": 30,
+    "15 minutes": 900,
+    "1 hour": 3600
+}
+
 # Streamlit UI setup
 st.set_page_config(page_title="Live Bitcoin OHLC", layout="wide")
 st.title("Live Bitcoin OHLC Close Prices (Step Chart)")
 st.markdown("Streaming OHLC data via Kraken API.")
 
-# Debug Status
+# Refresh rate selector (default: 5 seconds)
+selected_refresh = st.radio("Select Refresh Rate:", list(refresh_options.keys()), index=0, horizontal=True)
+refresh_rate = refresh_options[selected_refresh]
+
+# Debug status & countdown placeholders
 status_placeholder = st.empty()
+countdown_placeholder = st.empty()
 chart_placeholder = st.empty()
 price_placeholder = st.empty()
-
-refresh_rate = 2  # Fetch data every 2 seconds
-max_data_points = 50  # Keep last 50 points to reduce memory load
 
 # Initialize session state for OHLC history
 if "ohlc_data" not in st.session_state:
@@ -31,14 +41,14 @@ if "ohlc_data" not in st.session_state:
 def fetch_ohlc_data():
     try:
         params = {"pair": PAIR, "interval": INTERVAL}
-        response = requests.get(KRAKEN_OHLC_URL, params=params, timeout=5)  # Add timeout for reliability
-        response.raise_for_status()  # Raise exception for HTTP errors
+        response = requests.get(KRAKEN_OHLC_URL, params=params, timeout=5)
+        response.raise_for_status()
 
         data = response.json()
         ohlc = data.get("result", {}).get("XXBTZUSD", [])
         
         if not ohlc:
-            return None  # No data received, return None
+            return None
 
         # Convert to DataFrame and get close prices
         df = pd.DataFrame(ohlc, columns=["Time", "Open", "High", "Low", "Close", "Vwap", "Volume", "Trades"])
@@ -48,7 +58,7 @@ def fetch_ohlc_data():
     
     except requests.exceptions.RequestException as e:
         status_placeholder.error(f"⚠️ API Error: {e}")
-        return None  # Return None on error
+        return None
 
 # Main loop
 while True:
@@ -57,11 +67,9 @@ while True:
     new_data = fetch_ohlc_data()
     
     if new_data is not None and not new_data.equals(st.session_state.ohlc_data.tail(len(new_data))):
-        # Merge new data, avoid duplicates
+        # Merge new data & keep last 50 points
         st.session_state.ohlc_data = pd.concat([st.session_state.ohlc_data, new_data]).drop_duplicates(subset="Time")
-
-        # Keep last N data points
-        st.session_state.ohlc_data = st.session_state.ohlc_data.tail(max_data_points)
+        st.session_state.ohlc_data = st.session_state.ohlc_data.tail(50)
 
         # Get latest price
         latest_time = st.session_state.ohlc_data["Time"].iloc[-1]
@@ -106,6 +114,10 @@ while True:
         status_placeholder.text("✅ Data updated successfully!")
 
     else:
-        status_placeholder.text("⚠️ No new data. Waiting for next fetch...")
+        status_placeholder.text("⚠️ No new data. Waiting for next refresh...")
 
-    time.sleep(refresh_rate)  # Avoid excessive API calls
+    # Countdown timer
+    for i in range(refresh_rate, 0, -1):
+        countdown_placeholder.markdown(f"<h3 style='text-align: center;'>Next refresh in: {i} seconds ⏳</h3>", 
+                                       unsafe_allow_html=True)
+        time.sleep(1)
