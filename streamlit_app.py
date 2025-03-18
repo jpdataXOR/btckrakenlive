@@ -39,11 +39,15 @@ with col4:
     latest_price_placeholder = st.empty()
     latest_time_placeholder = st.empty()
 
+# Initialize session state for first run tracking
+if "is_first_run" not in st.session_state:
+    st.session_state.is_first_run = True
+
 # Initialize session state
 if "price_history" not in st.session_state:
     st.session_state.price_history = pd.DataFrame(columns=["date", "close"])
     
-# Initialize historical projections storage
+# Initialize historical projections storage - empty on first run
 if "historical_projections" not in st.session_state:
     st.session_state.historical_projections = []
     
@@ -65,11 +69,17 @@ while True:
     for proj in new_projections:
         proj["created_at"] = current_time
     
-    # Add new projections to historical list
+    # Add new projections to historical list (if not first run)
     if new_projections:
-        st.session_state.historical_projections = [*new_projections, *st.session_state.historical_projections]
-        # Limit the number of historical projections
-        st.session_state.historical_projections = st.session_state.historical_projections[:MAX_HISTORICAL_PROJECTIONS]
+        if st.session_state.is_first_run:
+            # On first run, only keep the current projections
+            st.session_state.historical_projections = new_projections
+            st.session_state.is_first_run = False
+        else:
+            # On subsequent runs, append new projections to history
+            st.session_state.historical_projections = [*new_projections, *st.session_state.historical_projections]
+            # Limit the number of historical projections
+            st.session_state.historical_projections = st.session_state.historical_projections[:MAX_HISTORICAL_PROJECTIONS]
 
     if not stock_data:
         debug_message = "**⚠ No new data received!**"
@@ -110,14 +120,15 @@ while True:
                 max_age_seconds = refresh_rate * MAX_HISTORICAL_PROJECTIONS
                 opacity = max(0.1, 1 - (age_seconds / max_age_seconds))
                 
-                # Newest projection is red, older ones fade to gray
+                # Newest projection is red, older ones fade to light gray
                 if idx == 0:
                     # Newest projection is red
                     color = f"rgba(255,0,0,{opacity})"
                     name = f"{proj['label']} (Current)"
                 else:
-                    # Older projections are increasingly gray
-                    gray_value = int(120 * (1 - opacity))
+                    # Older projections are increasingly light gray
+                    # Using higher base values (180-220) for lighter gray
+                    gray_value = int(180 + (40 * (1 - opacity)))
                     color = f"rgba({gray_value},{gray_value},{gray_value},{opacity})"
                     name = f"{proj['label']} (Past {idx}, {int(opacity*100)}%)"
                 
@@ -143,7 +154,8 @@ while True:
     # Show debug message
     with placeholder_debug.container():
         st.markdown(debug_message)
-        st.markdown(f"**Historical Projections:** {len(st.session_state.historical_projections)}")
+        if not st.session_state.is_first_run:
+            st.markdown(f"**Historical Projections:** {len(st.session_state.historical_projections)}")
 
     # Update countdown timer
     for remaining in range(refresh_rate, 0, -1):
