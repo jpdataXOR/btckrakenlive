@@ -68,7 +68,7 @@ placeholder_data_info = st.empty()
 while True:
     # Fetch latest OHLC data
     stock_data = get_stock_data("XXBTZUSD", ohlc_interval)
-    
+
     if not stock_data:
         debug_message = "**⚠ No new data received!**"
         data_info_message = ""
@@ -80,7 +80,7 @@ while True:
         earliest_date = datetime.strptime(stock_data[0]["date"], "%d-%b-%Y %H:%M")
         latest_date = datetime.strptime(stock_data[-1]["date"], "%d-%b-%Y %H:%M")
         date_range = latest_date - earliest_date
-        
+
         # Format date range based on its span
         if date_range.days > 0:
             date_range_str = f"{date_range.days} days, {date_range.seconds // 3600} hours"
@@ -91,7 +91,7 @@ while True:
         latest_price = latest_row["close"]
         latest_time = convert_to_aest(latest_row["date"])
         debug_message = f"📌 **Debug:** Latest Data → {latest_row}"
-        
+
         # Create data info message
         data_info_message = f"""
         📊 **Historical Data Summary:**
@@ -116,13 +116,13 @@ while True:
         if stock_data:
             # Get the last 20 data points for display
             last_20_data = stock_data[-20:]
-            
+
             # Determine y-axis range based on actual price data
             prices = [item["close"] for item in last_20_data]
             min_price = min(prices)
             max_price = max(prices)
             price_range = max_price - min_price
-            
+
             # Calculate y-axis limits with padding
             padding = price_range * (y_axis_padding / 100)
             y_min = max(0, min_price - padding)  # Ensure we don't go below zero
@@ -136,12 +136,12 @@ while True:
                 line=dict(shape="hv", color="black", width=2),
                 name="Price",
             ))
-            
+
             # Add dot and price label at the latest point
             latest_point = last_20_data[-1]
             latest_point_date = convert_to_aest(latest_point["date"])
             latest_point_price = latest_point["close"]
-            
+
             fig.add_trace(go.Scatter(
                 x=[latest_point_date],
                 y=[latest_point_price],
@@ -156,72 +156,73 @@ while True:
 
             # Starting point for projections (point 10 to point 20)
             projection_start_points = range(9, 20)  # 0-indexed, so 9 is the 10th point from the end
-            
+
             # Store all projection points to analyze extreme values
             all_projection_values = []
-            
+
             # Dictionary to store projection values for each future time point
             # Structure: {time_point: {start_point_idx: [projection_values]}}
             future_projection_values = {}
-            
+            latest_point_projection_values = {} # NEW: Store projections from the latest point
+
             # Track pattern matches to report on pattern quality
             pattern_matches = {}
-            
+
             # Generate and display projections for each starting point
             for idx in projection_start_points:
                 if idx >= len(last_20_data):
                     continue
-                    
+
                 start_point = last_20_data[idx]
-                start_idx = stock_data.index(start_point)
-                
+                start_idx_full = stock_data.index(start_point)
+
                 # Generate multiple projections starting from this point
-                projections = generate_future_projections_from_point(stock_data, start_idx, future_points=10, num_lines=projections_per_point)
-                
+                projections = generate_future_projections_from_point(stock_data, start_idx_full, future_points=10, num_lines=projections_per_point)
+
                 # Store pattern match information for reporting
                 if projections:
                     pattern_matches[idx] = {
                         "count": len(projections),
-                        "pattern_lengths": []
+                        "pattern_lengths":[]
                     }
-                    
+
                 # Is this the latest point? (p20)
                 is_latest_point = (idx == 19)
-                
+
                 # Process each projection for this point
                 for proj_idx, proj in enumerate(projections):
                     # Capture pattern length if available
                     if "pattern_length" in proj:
                         pattern_matches[idx]["pattern_lengths"].append(proj["pattern_length"])
-                    
+
                     # Use red for latest point projections, gray for others
                     # Vary opacity for multiple lines from the same point
                     base_opacity = 0.8 if is_latest_point else 0.6
                     opacity = base_opacity - (0.1 * proj_idx)  # Decrease opacity for additional lines
                     opacity = max(0.3, opacity)  # Don't go too transparent
-                    
+
                     if is_latest_point:
                         color = f"rgba(255,0,0,{opacity})"
                         line_width = 2 if proj_idx == 0 else 1.5
                     else:
                         color = f"rgba(150,150,150,{opacity})"
                         line_width = 1
-                    
+
                     # Format the projection label
                     point_number = idx + 1
                     if proj_idx == 0:
                         label = f"Latest Projection" if is_latest_point else f"From P{point_number}"
                     else:
                         label = f"Latest Alt {proj_idx}" if is_latest_point else f"From P{point_number} Alt {proj_idx}"
-                    
+
                     # Process projection data
                     projection_data = proj["data"].copy()
                     if clip_projections:
                         # Collect all values for checking extremes
                         for point in projection_data:
                             all_projection_values.append(point["close"])
-                    
-                    # Store projection values by time point for average calculation
+
+                    # Store projection values by time point
                     for point_idx, point in enumerate(projection_data):
                         time_point = point["date"]
                         if time_point not in future_projection_values:
@@ -229,7 +230,13 @@ while True:
                         if idx not in future_projection_values[time_point]:
                             future_projection_values[time_point][idx] = []
                         future_projection_values[time_point][idx].append(point["close"])
-                    
+
+                        # NEW: Store latest point's projections separately
+                        if is_latest_point:
+                            if time_point not in latest_point_projection_values:
+                                latest_point_projection_values[time_point] = []
+                            latest_point_projection_values[time_point].append(point["close"])
+
                     fig.add_trace(go.Scatter(
                         x=[convert_to_aest(item["date"]) for item in projection_data],
                         y=[item["close"] for item in projection_data],
@@ -237,49 +244,62 @@ while True:
                         line=dict(shape="hv", dash="dot", color=color, width=line_width),
                         name=label,
                     ))
-            
-            # Calculate and display average projections for each time point
+
+            # Calculate and display average projections for each time point (overall average)
             avg_projection_data = {}
-            
-            # Process the stored projection values to find averages
             for time_point, start_point_projections in future_projection_values.items():
                 avg_projection_data[time_point] = {}
-                # Calculate the average of all projections for this time point
                 all_values = []
-                for start_idx, values in start_point_projections.items():
+                for start_idx_local, values in start_point_projections.items():
                     all_values.extend(values)
-                
                 if all_values:
                     avg_projection_data[time_point]["avg"] = np.mean(all_values)
-            
-            # Sort by time point to create a time series
-            sorted_time_points = sorted(avg_projection_data.keys())
-            avg_projection_x = [convert_to_aest(t) for t in sorted_time_points]
-            avg_projection_y = [avg_projection_data[t]["avg"] for t in sorted_time_points]
-            
-            # Add average projection line if we have data
-            if avg_projection_x and avg_projection_y:
+
+            sorted_time_points_overall = sorted(avg_projection_data.keys())
+            avg_projection_x_overall = [convert_to_aest(t) for t in sorted_time_points_overall]
+            avg_projection_y_overall = [avg_projection_data[t]["avg"] for t in sorted_time_points_overall]
+
+            if avg_projection_x_overall and avg_projection_y_overall:
                 fig.add_trace(go.Scatter(
-                    x=avg_projection_x,
-                    y=avg_projection_y,
+                    x=avg_projection_x_overall,
+                    y=avg_projection_y_overall,
                     mode="lines",
-                    line=dict(shape="hv", dash="dot", color="rgba(0,128,255,0.8)", width=2.5),
-                    name="Average Projection",
+                    line=dict(shape="hv", dash="dot", color="rgba(100,180,255,0.8)", width=2.5), # Lighter blue,
+                    name="Average Projection (All)",
                 ))
-            
+
+            # NEW: Calculate and display average projection for the latest point
+            avg_latest_projection_data = {}
+            for time_point, values in latest_point_projection_values.items():
+                if values:
+                    avg_latest_projection_data[time_point] = np.mean(values)
+
+            sorted_time_points_latest = sorted(avg_latest_projection_data.keys())
+            avg_latest_projection_x = [convert_to_aest(t) for t in sorted_time_points_latest]
+            avg_latest_projection_y = [avg_latest_projection_data[t] for t in sorted_time_points_latest]
+
+            if avg_latest_projection_x and avg_latest_projection_y:
+                fig.add_trace(go.Scatter(
+                    x=avg_latest_projection_x,
+                    y=avg_latest_projection_y,
+                    mode="lines",
+                    line=dict(shape="hv", dash="dot", color="rgba(0,0,180,0.8)", width=2.5), # Darker blue
+                    name="Average Projection (Latest Point)",
+                ))
+
             # Adjust y-axis range if extreme projections need to be accommodated
             if clip_projections and all_projection_values:
                 # Calculate reasonable limits for projections
                 # Allow projections to extend the range by 50% at most
                 projection_min = min(all_projection_values)
                 projection_max = max(all_projection_values)
-                
+
                 # Only expand the range if projections are within a reasonable distance
                 max_expansion = price_range * 0.5
-                
+
                 if projection_min < y_min and projection_min > y_min - max_expansion:
                     y_min = projection_min
-                
+
                 if projection_max > y_max and projection_max < y_max + max_expansion:
                     y_max = projection_max
 
@@ -291,9 +311,9 @@ while True:
             )
 
         fig.update_layout(
-            title="Live Bitcoin Price with Future Predictions", 
-            xaxis_title="Time (AEST)", 
-            yaxis_title="Price (USD)", 
+            title="Live Bitcoin Price with Future Predictions",
+            xaxis_title="Time (AEST)",
+            yaxis_title="Price (USD)",
             showlegend=True
         )
 
@@ -302,19 +322,19 @@ while True:
     # Show data info message
     with placeholder_data_info:
         st.markdown(data_info_message)
-    
+
     # Show debug message
     with placeholder_debug.container():
         st.markdown(debug_message)
         if clip_projections and all_projection_values and stock_data:
             total_projections = len(projection_start_points) * projections_per_point
             st.markdown(f"Y-axis range: ${y_min:.2f} - ${y_max:.2f} | Generating {projections_per_point} projections per point × {len(projection_start_points)} points = {total_projections} total projections")
-            
+
             # Display pattern match information if available
             if pattern_matches:
                 total_patterns = sum(match["count"] for match in pattern_matches.values())
                 avg_pattern_length = np.mean([length for match in pattern_matches.values() for length in match["pattern_lengths"]]) if any(match["pattern_lengths"] for match in pattern_matches.values()) else "N/A"
-                
+
                 pattern_info = f"""
                 🔍 **Pattern Matching Stats:**
                 - Total pattern matches found: **{total_patterns}**
