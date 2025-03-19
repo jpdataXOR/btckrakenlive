@@ -39,6 +39,17 @@ with col4:
     latest_price_placeholder = st.empty()
     latest_time_placeholder = st.empty()
 
+# Add controls for Y-axis scaling and projections
+col1, col2, col3 = st.columns(3)
+with col1:
+    y_axis_padding = st.slider("Y-Axis Padding (%)", min_value=1, max_value=10, value=5, help="Percentage padding above and below the main price range")
+
+with col2:
+    clip_projections = st.checkbox("Clip Extreme Projections", value=True, help="Limit projection values to a reasonable range")
+
+with col3:
+    projections_per_point = st.slider("Projections per Point", min_value=1, max_value=5, value=3, help="Number of prediction lines to generate from each point")
+
 # Initialize session state for first run tracking
 if "is_first_run" not in st.session_state:
     st.session_state.is_first_run = True
@@ -80,6 +91,17 @@ while True:
         if stock_data:
             # Get the last 20 data points for display
             last_20_data = stock_data[-20:]
+            
+            # Determine y-axis range based on actual price data
+            prices = [item["close"] for item in last_20_data]
+            min_price = min(prices)
+            max_price = max(prices)
+            price_range = max_price - min_price
+            
+            # Calculate y-axis limits with padding
+            padding = price_range * (y_axis_padding / 100)
+            y_min = max(0, min_price - padding)  # Ensure we don't go below zero
+            y_max = max_price + padding
 
             # Add the main price line
             fig.add_trace(go.Scatter(
@@ -93,6 +115,9 @@ while True:
             # Starting point for projections (point 10 to point 20)
             projection_start_points = range(9, 20)  # 0-indexed, so 9 is the 10th point from the end
             
+            # Store all projection points to analyze extreme values
+            all_projection_values = []
+            
             # Generate and display projections for each starting point
             for idx in projection_start_points:
                 if idx >= len(last_20_data):
@@ -101,26 +126,71 @@ while True:
                 start_point = last_20_data[idx]
                 start_idx = stock_data.index(start_point)
                 
-                # Generate projections starting from this point
-                projections = generate_future_projections_from_point(stock_data, start_idx, future_points=10, num_lines=1)
+                # Generate multiple projections starting from this point
+                projections = generate_future_projections_from_point(stock_data, start_idx, future_points=10, num_lines=projections_per_point)
                 
-                for proj in projections:
-                    # Use red for latest point (p20), gray for others
-                    is_latest = (idx == 19)
-                    color = "rgba(255,0,0,0.8)" if is_latest else f"rgba(150,150,150,0.6)"
-                    line_width = 2 if is_latest else 1
+                # Is this the latest point? (p20)
+                is_latest_point = (idx == 19)
+                
+                # Process each projection for this point
+                for proj_idx, proj in enumerate(projections):
+                    # Use red for latest point projections, gray for others
+                    # Vary opacity for multiple lines from the same point
+                    base_opacity = 0.8 if is_latest_point else 0.6
+                    opacity = base_opacity - (0.1 * proj_idx)  # Decrease opacity for additional lines
+                    opacity = max(0.3, opacity)  # Don't go too transparent
+                    
+                    if is_latest_point:
+                        color = f"rgba(255,0,0,{opacity})"
+                        line_width = 2 if proj_idx == 0 else 1.5
+                    else:
+                        color = f"rgba(150,150,150,{opacity})"
+                        line_width = 1
                     
                     # Format the projection label
                     point_number = idx + 1
-                    label = f"Latest Projection" if is_latest else f"From P{point_number}"
+                    if proj_idx == 0:
+                        label = f"Latest Projection" if is_latest_point else f"From P{point_number}"
+                    else:
+                        label = f"Latest Alt {proj_idx}" if is_latest_point else f"From P{point_number} Alt {proj_idx}"
+                    
+                    # Process projection data
+                    projection_data = proj["data"].copy()
+                    if clip_projections:
+                        # Collect all values for checking extremes
+                        for point in projection_data:
+                            all_projection_values.append(point["close"])
                     
                     fig.add_trace(go.Scatter(
-                        x=[convert_to_aest(item["date"]) for item in proj["data"]],
-                        y=[item["close"] for item in proj["data"]],
+                        x=[convert_to_aest(item["date"]) for item in projection_data],
+                        y=[item["close"] for item in projection_data],
                         mode="lines",
                         line=dict(shape="hv", dash="dot", color=color, width=line_width),
                         name=label,
                     ))
+            
+            # Adjust y-axis range if extreme projections need to be accommodated
+            if clip_projections and all_projection_values:
+                # Calculate reasonable limits for projections
+                # Allow projections to extend the range by 50% at most
+                projection_min = min(all_projection_values)
+                projection_max = max(all_projection_values)
+                
+                # Only expand the range if projections are within a reasonable distance
+                max_expansion = price_range * 0.5
+                
+                if projection_min < y_min and projection_min > y_min - max_expansion:
+                    y_min = projection_min
+                
+                if projection_max > y_max and projection_max < y_max + max_expansion:
+                    y_max = projection_max
+
+            # Set the y-axis range
+            fig.update_layout(
+                yaxis=dict(
+                    range=[y_min, y_max],
+                )
+            )
 
         fig.update_layout(
             title="Live Bitcoin Price with Future Predictions", 
@@ -134,6 +204,9 @@ while True:
     # Show debug message
     with placeholder_debug.container():
         st.markdown(debug_message)
+        if clip_projections and all_projection_values and stock_data:
+            total_projections = len(projection_start_points) * projections_per_point
+            st.markdown(f"Y-axis range: ${y_min:.2f} - ${y_max:.2f} | Generating {projections_per_point} projections per point × {len(projection_start_points)} points = {total_projections} total projections")
 
     # Update countdown timer
     for remaining in range(refresh_rate, 0, -1):
