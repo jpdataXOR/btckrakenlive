@@ -7,6 +7,7 @@ import streamlit.components.v1 as components
 from data_utils import get_stock_data, generate_future_projections_from_point
 from pytz import timezone
 from datetime import datetime
+import numpy as np
 
 # Convert UTC time to AEST
 def convert_to_aest(utc_time):
@@ -111,12 +112,33 @@ while True:
                 line=dict(shape="hv", color="black", width=2),
                 name="Price",
             ))
+            
+            # Add dot and price label at the latest point
+            latest_point = last_20_data[-1]
+            latest_point_date = convert_to_aest(latest_point["date"])
+            latest_point_price = latest_point["close"]
+            
+            fig.add_trace(go.Scatter(
+                x=[latest_point_date],
+                y=[latest_point_price],
+                mode="markers+text",
+                marker=dict(size=10, color="black"),
+                text=[f"${latest_point_price:,.2f}"],
+                textposition="top right",
+                textfont=dict(size=12, color="black"),
+                name="Latest Point",
+                showlegend=False,
+            ))
 
             # Starting point for projections (point 10 to point 20)
             projection_start_points = range(9, 20)  # 0-indexed, so 9 is the 10th point from the end
             
             # Store all projection points to analyze extreme values
             all_projection_values = []
+            
+            # Dictionary to store projection values for each future time point
+            # Structure: {time_point: {start_point_idx: [projection_values]}}
+            future_projection_values = {}
             
             # Generate and display projections for each starting point
             for idx in projection_start_points:
@@ -161,6 +183,15 @@ while True:
                         for point in projection_data:
                             all_projection_values.append(point["close"])
                     
+                    # Store projection values by time point for average calculation
+                    for point_idx, point in enumerate(projection_data):
+                        time_point = point["date"]
+                        if time_point not in future_projection_values:
+                            future_projection_values[time_point] = {}
+                        if idx not in future_projection_values[time_point]:
+                            future_projection_values[time_point][idx] = []
+                        future_projection_values[time_point][idx].append(point["close"])
+                    
                     fig.add_trace(go.Scatter(
                         x=[convert_to_aest(item["date"]) for item in projection_data],
                         y=[item["close"] for item in projection_data],
@@ -168,6 +199,35 @@ while True:
                         line=dict(shape="hv", dash="dot", color=color, width=line_width),
                         name=label,
                     ))
+            
+            # Calculate and display average projections for each time point
+            avg_projection_data = {}
+            
+            # Process the stored projection values to find averages
+            for time_point, start_point_projections in future_projection_values.items():
+                avg_projection_data[time_point] = {}
+                # Calculate the average of all projections for this time point
+                all_values = []
+                for start_idx, values in start_point_projections.items():
+                    all_values.extend(values)
+                
+                if all_values:
+                    avg_projection_data[time_point]["avg"] = np.mean(all_values)
+            
+            # Sort by time point to create a time series
+            sorted_time_points = sorted(avg_projection_data.keys())
+            avg_projection_x = [convert_to_aest(t) for t in sorted_time_points]
+            avg_projection_y = [avg_projection_data[t]["avg"] for t in sorted_time_points]
+            
+            # Add average projection line if we have data
+            if avg_projection_x and avg_projection_y:
+                fig.add_trace(go.Scatter(
+                    x=avg_projection_x,
+                    y=avg_projection_y,
+                    mode="lines",
+                    line=dict(shape="hv", dash="dot", color="rgba(0,128,255,0.8)", width=2.5),
+                    name="Average Projection",
+                ))
             
             # Adjust y-axis range if extreme projections need to be accommodated
             if clip_projections and all_projection_values:
