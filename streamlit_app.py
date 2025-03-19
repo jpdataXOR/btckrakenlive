@@ -30,7 +30,7 @@ with col1:
 
 with col2:
     st.markdown("**🕒 Chart Interval:**")
-    ohlc_interval = st.radio("Choose OHLC interval:", [1, 15, 60], format_func=lambda x: f"{x} min", horizontal=True, index=1)
+    ohlc_interval = st.radio("Choose OHLC interval:", [1, 5,15, 60], format_func=lambda x: f"{x} min", horizontal=True, index=1)
 
 with col3:
     st.markdown("**⏳ Next Refresh In:**")
