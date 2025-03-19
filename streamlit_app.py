@@ -62,6 +62,7 @@ if "price_history" not in st.session_state:
 # Chart & Debug placeholders
 placeholder_chart = st.empty()
 placeholder_debug = st.empty()
+placeholder_data_info = st.empty()
 
 # Main loop
 while True:
@@ -70,13 +71,36 @@ while True:
     
     if not stock_data:
         debug_message = "**⚠ No new data received!**"
+        data_info_message = ""
     else:
         st.session_state.price_history = stock_data.copy()
+
+        # Calculate how much historical data we have
+        total_data_points = len(stock_data)
+        earliest_date = datetime.strptime(stock_data[0]["date"], "%d-%b-%Y %H:%M")
+        latest_date = datetime.strptime(stock_data[-1]["date"], "%d-%b-%Y %H:%M")
+        date_range = latest_date - earliest_date
+        
+        # Format date range based on its span
+        if date_range.days > 0:
+            date_range_str = f"{date_range.days} days, {date_range.seconds // 3600} hours"
+        else:
+            date_range_str = f"{date_range.seconds // 3600} hours, {(date_range.seconds % 3600) // 60} minutes"
 
         latest_row = stock_data[-1]
         latest_price = latest_row["close"]
         latest_time = convert_to_aest(latest_row["date"])
         debug_message = f"📌 **Debug:** Latest Data → {latest_row}"
+        
+        # Create data info message
+        data_info_message = f"""
+        📊 **Historical Data Summary:**
+        - Total data points: **{total_data_points}**
+        - Date range: **{date_range_str}**
+        - First record: **{convert_to_aest(stock_data[0]['date'])}**
+        - Last record: **{latest_time}**
+        - Time interval: **{ohlc_interval} minutes**
+        """
 
     # Display latest price
     with latest_price_placeholder:
@@ -140,6 +164,9 @@ while True:
             # Structure: {time_point: {start_point_idx: [projection_values]}}
             future_projection_values = {}
             
+            # Track pattern matches to report on pattern quality
+            pattern_matches = {}
+            
             # Generate and display projections for each starting point
             for idx in projection_start_points:
                 if idx >= len(last_20_data):
@@ -151,11 +178,22 @@ while True:
                 # Generate multiple projections starting from this point
                 projections = generate_future_projections_from_point(stock_data, start_idx, future_points=10, num_lines=projections_per_point)
                 
+                # Store pattern match information for reporting
+                if projections:
+                    pattern_matches[idx] = {
+                        "count": len(projections),
+                        "pattern_lengths": []
+                    }
+                    
                 # Is this the latest point? (p20)
                 is_latest_point = (idx == 19)
                 
                 # Process each projection for this point
                 for proj_idx, proj in enumerate(projections):
+                    # Capture pattern length if available
+                    if "pattern_length" in proj:
+                        pattern_matches[idx]["pattern_lengths"].append(proj["pattern_length"])
+                    
                     # Use red for latest point projections, gray for others
                     # Vary opacity for multiple lines from the same point
                     base_opacity = 0.8 if is_latest_point else 0.6
@@ -261,12 +299,29 @@ while True:
 
         st.plotly_chart(fig, use_container_width=True)
 
+    # Show data info message
+    with placeholder_data_info:
+        st.markdown(data_info_message)
+    
     # Show debug message
     with placeholder_debug.container():
         st.markdown(debug_message)
         if clip_projections and all_projection_values and stock_data:
             total_projections = len(projection_start_points) * projections_per_point
             st.markdown(f"Y-axis range: ${y_min:.2f} - ${y_max:.2f} | Generating {projections_per_point} projections per point × {len(projection_start_points)} points = {total_projections} total projections")
+            
+            # Display pattern match information if available
+            if pattern_matches:
+                total_patterns = sum(match["count"] for match in pattern_matches.values())
+                avg_pattern_length = np.mean([length for match in pattern_matches.values() for length in match["pattern_lengths"]]) if any(match["pattern_lengths"] for match in pattern_matches.values()) else "N/A"
+                
+                pattern_info = f"""
+                🔍 **Pattern Matching Stats:**
+                - Total pattern matches found: **{total_patterns}**
+                - Average pattern length: **{avg_pattern_length if avg_pattern_length != 'N/A' else 'N/A'}**
+                - Using **{len(stock_data)}** historical data points for pattern matching
+                """
+                st.markdown(pattern_info)
 
     # Update countdown timer
     for remaining in range(refresh_rate, 0, -1):
