@@ -49,7 +49,7 @@ with col2:
     clip_projections = st.checkbox("Clip Extreme Projections", value=True, help="Limit projection values to a reasonable range")
 
 with col3:
-    projections_per_point = st.slider("Projections per Point", min_value=1, max_value=5, value=3, help="Number of prediction lines to generate from each point")
+    projections_per_point = st.slider("Projections per Point", min_value=1, max_value=10, value=3, help="Number of prediction lines to generate from each point")
 
 # Initialize session state for first run tracking
 if "is_first_run" not in st.session_state:
