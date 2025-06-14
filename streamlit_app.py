@@ -61,6 +61,7 @@ if "price_history" not in st.session_state:
 
 # Chart & Debug placeholders
 placeholder_chart = st.empty()
+placeholder_table = st.empty()
 placeholder_debug = st.empty()
 placeholder_data_info = st.empty()
 
@@ -168,6 +169,9 @@ while True:
             # Track pattern matches to report on pattern quality
             pattern_matches = {}
 
+            # Store table data for future projections
+            table_data = []
+
             # Generate and display projections for each starting point
             for idx in projection_start_points:
                 if idx >= len(last_20_data):
@@ -194,6 +198,18 @@ while True:
                     # Capture pattern length if available
                     if "pattern_length" in proj:
                         pattern_matches[idx]["pattern_lengths"].append(proj["pattern_length"])
+
+                    # Store table data for projections from the latest point
+                    if is_latest_point:
+                        for point_idx, point in enumerate(proj["data"]):
+                            if point_idx > 0:  # Skip the starting point
+                                table_data.append({
+                                    "Time": convert_to_aest(point["date"]),
+                                    "Projection": f"Latest P{proj_idx + 1}",
+                                    "Price": f"${point['close']:,.2f}",
+                                    "Price_Value": point['close'],
+                                    "Change": f"{((point['close'] - latest_point_price) / latest_point_price * 100):+.2f}%"
+                                })
 
                     # Use red for latest point projections, gray for others
                     # Vary opacity for multiple lines from the same point
@@ -260,6 +276,17 @@ while True:
             avg_projection_y_overall = [avg_projection_data[t]["avg"] for t in sorted_time_points_overall]
 
             if avg_projection_x_overall and avg_projection_y_overall:
+                # Add average projection data to table
+                for i, (time_point, price) in enumerate(zip(avg_projection_x_overall, avg_projection_y_overall)):
+                    if i > 0:  # Skip the starting point
+                        table_data.append({
+                            "Time": time_point,
+                            "Projection": "Average (All)",
+                            "Price": f"${price:,.2f}",
+                            "Price_Value": price,
+                            "Change": f"{((price - latest_point_price) / latest_point_price * 100):+.2f}%"
+                        })
+
                 fig.add_trace(go.Scatter(
                     x=avg_projection_x_overall,
                     y=avg_projection_y_overall,
@@ -279,6 +306,17 @@ while True:
             avg_latest_projection_y = [avg_latest_projection_data[t] for t in sorted_time_points_latest]
 
             if avg_latest_projection_x and avg_latest_projection_y:
+                # Add latest point average projection data to table
+                for i, (time_point, price) in enumerate(zip(avg_latest_projection_x, avg_latest_projection_y)):
+                    if i > 0:  # Skip the starting point
+                        table_data.append({
+                            "Time": time_point,
+                            "Projection": "Average (Latest)",
+                            "Price": f"${price:,.2f}",
+                            "Price_Value": price,
+                            "Change": f"{((price - latest_point_price) / latest_point_price * 100):+.2f}%"
+                        })
+
                 fig.add_trace(go.Scatter(
                     x=avg_latest_projection_x,
                     y=avg_latest_projection_y,
@@ -318,6 +356,60 @@ while True:
         )
 
         st.plotly_chart(fig, use_container_width=True)
+
+    # Display Future Projections Table
+    with placeholder_table.container():
+        if table_data:
+            st.markdown("## 📊 Future Projections Table")
+            
+            # Convert to DataFrame for better display
+            df_table = pd.DataFrame(table_data)
+            
+            # Sort by time and projection type
+            df_table['Time_Parsed'] = pd.to_datetime(df_table['Time'], format='%d-%b-%Y %H:%M')
+            df_table = df_table.sort_values(['Time_Parsed', 'Projection'])
+            
+            # Group by time for better readability
+            st.markdown("### Key Projections Summary")
+            
+            # Create a pivot table for easier reading
+            pivot_data = []
+            unique_times = df_table['Time'].unique()
+            
+            for time_point in sorted(unique_times):
+                time_data = df_table[df_table['Time'] == time_point]
+                
+                # Get averages
+                avg_all = time_data[time_data['Projection'] == 'Average (All)']
+                avg_latest = time_data[time_data['Projection'] == 'Average (Latest)']
+                
+                row_data = {
+                    'Time': time_point,
+                    'Avg All Projections': avg_all['Price'].iloc[0] if not avg_all.empty else 'N/A',
+                    'Avg All Change': avg_all['Change'].iloc[0] if not avg_all.empty else 'N/A',
+                    'Avg Latest Projections': avg_latest['Price'].iloc[0] if not avg_latest.empty else 'N/A',
+                    'Avg Latest Change': avg_latest['Change'].iloc[0] if not avg_latest.empty else 'N/A',
+                }
+                pivot_data.append(row_data)
+            
+            # Display summary table
+            if pivot_data:
+                summary_df = pd.DataFrame(pivot_data)
+                st.dataframe(summary_df, use_container_width=True)
+            
+            # Display detailed table
+            st.markdown("### Detailed Projections")
+            display_df = df_table[['Time', 'Projection', 'Price', 'Change']].copy()
+            st.dataframe(display_df, use_container_width=True)
+            
+            # Download button for the data
+            csv = df_table.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Projections as CSV",
+                data=csv,
+                file_name=f'bitcoin_projections_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv',
+                mime='text/csv'
+            )
 
     # Show data info message
     with placeholder_data_info:
